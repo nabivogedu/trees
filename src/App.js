@@ -1,144 +1,103 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Tree from 'react-d3-tree';
+import './index.css';
 
-export function generateTreeArray(rootId, levels) {
-  const array = [];
+const generateFullTree = (rootId, maxLevels) => {
   let idCounter = 1;
 
-  function createNode(source, level) {
-    if (level > levels) return;
+  const createNode = (source, level) => {
+    if (level > maxLevels) return [];
 
-    for (let i = 0; i < 6; i++) {
+    return Array.from({ length: 6 }, () => {
       const destinationId = `${source}-${idCounter++}`;
-      array.push({
-        source: source,
-        destination: destinationId,
-        root: rootId,
-        weight: Math.floor(Math.random() * 10) + 1, 
-        parent: level === 1 ? null : source,
-      });
-      createNode(destinationId, level + 1);
-    }
-  }
-
-  createNode(rootId, 1);
-  return array;
-}
-
-export function buildTree(array) {
-  const nodes = {};
-
-  array.forEach(({ source, destination, weight }) => {
-    if (!nodes[source]) {
-      nodes[source] = { name: source, children: [], weights: {} };
-    }
-    if (!nodes[destination]) {
-      nodes[destination] = { name: destination, children: [], weights: {} };
-    }
-    nodes[source].children.push({ ...nodes[destination], weight });
-    nodes[source].weights[destination] = weight;
-  });
-
-  return Object.values(nodes).find(node => !array.some(item => item.destination === node.name));
-}
-
-// This function logs the number of direct children for a given parent, excluding siblings
-function logChildCount(array, parent) {
-  const parentNodes = array.filter(item => item.source === parent);
-  console.log(`Parent ${parent} has ${parentNodes.length} direct children.`);
-  parentNodes.forEach(child => console.log(child.destination));
-}
-
-const findMaxWeightPath = (node) => {
-  let maxWeight = 0;
-  let maxPath = [];
-
-  const findPath = (currentNode, path, totalWeight) => {
-    if (!currentNode.children || currentNode.children.length === 0) {
-      if (totalWeight > maxWeight) {
-        maxWeight = totalWeight;
-        maxPath = path;
-      }
-    } else {
-      currentNode.children.forEach((child) => {
-        findPath(child, [...path, child.name], totalWeight + child.weight);
-      });
-    }
+      return {
+        name: destinationId,
+        attributes: {
+          source: source,
+          destination: destinationId,
+          weight: Math.floor(Math.random() * 10) + 1,
+          parent: source,
+        },
+        children: createNode(destinationId, level + 1),
+      };
+    });
   };
 
-  findPath(node, [node.name], 0);
-  return maxPath;
+  return { name: rootId, children: createNode(rootId, 1) };
+};
+
+const findNode = (node, path) => {
+  return path.reduce((currentNode, part) => {
+    return currentNode?.children?.find(child => child.name === part) || null;
+  }, node);
+};
+
+const getMaxPath = (node) => {
+  if (!node || !node.children || node.children.length === 0) {
+    return { path: [node.name], weight: 0 };
+  }
+
+  return node.children.reduce((max, child) => {
+    const { path, weight } = getMaxPath(child);
+    const totalWeight = weight + (child.attributes?.weight || 0);
+    if (totalWeight > max.weight) {
+      return { path: [node.name, ...path], weight: totalWeight };
+    }
+    return max;
+  }, { path: [], weight: 0 });
 };
 
 const App = () => {
-  const [treeData, setTreeData] = useState([]);
-  const [maxPath, setMaxPath] = useState([]);
+  const [fullTree, setFullTree] = useState({});
+  const [visibleTree, setVisibleTree] = useState(null);
 
   useEffect(() => {
-    const generatedArray = generateTreeArray('A', 2);
-    const treeStructure = buildTree(generatedArray);
-
-    console.log('Tree structure:', treeStructure);
-
-    const maxWeightPath = findMaxWeightPath(treeStructure);
-    setMaxPath(maxWeightPath);
-
-    console.log('Max weight path:', maxWeightPath);
-
-    logChildCount(generatedArray, 'A');
-
-    setTreeData([treeStructure]);
+    const tree = generateFullTree('A', 5);
+    setFullTree(tree);
+    setVisibleTree({ name: tree.name, children: tree.children });
   }, []);
 
-  const renderCustomPath = (linkData) => {
-    const weight = linkData.target.data.weight;
-    console.log('Rendering path for:', linkData.target.data);
+  const onNodeClick = useCallback((nodeData) => {
+    const nodeName = nodeData.data.name;
+    if (!nodeName) {
+      console.error('Invalid node data:', nodeData);
+      return;
+    }
 
-    const isMaxPath = maxPath.includes(linkData.target.data.name);
+    const path = nodeName.split('-');
+    const node = findNode(fullTree, path);
+    if (node && node.children) {
+      setVisibleTree(prevTree => {
+        const newTree = { ...prevTree };
+        const targetNode = findNode(newTree, path);
+        if (targetNode) {
+          targetNode.children = node.children;
+        }
+        return newTree;
+      });
+    }
+  }, [fullTree]);
 
-    if (isMaxPath) console.log('Max path link found:', linkData.target.data);
+  const maxPathInfo = useMemo(() => getMaxPath(fullTree), [fullTree]);
 
-    const midpointX = (linkData.source.x + linkData.target.x) / 2;
-    const midpointY = (linkData.source.y + linkData.target.y) / 2;
-
-    return (
-      <g>
-        <path
-          d={`M${linkData.source.x},${linkData.source.y}L${linkData.target.x},${linkData.target.y}`}
-          stroke={isMaxPath ? 'red' : '#b3b3b3'}
-          strokeWidth={3}
-        />
-        <text
-          x={midpointX}
-          y={midpointY}
-          style={{
-            fontSize: '12px',
-            fontFamily: 'Arial',
-            fill: isMaxPath ? 'red' : 'black',
-            pointerEvents: 'none',
-          }}
-          textAnchor="middle"
-        >
-          {weight}
-        </text>
-      </g>
-    );
-  };
-
+  const treeComponent = useMemo(() => (
+    <Tree
+      data={visibleTree}
+      orientation="vertical"
+      translate={{ x: window.innerWidth / 2, y: window.innerHeight / 5 }}
+      separation={{ siblings: 2, nonSiblings: 2 }} 
+      onNodeClick={onNodeClick}
+      initialDepth={0}
+    />
+  ), [visibleTree, onNodeClick]);
 
   return (
-    <div className="App" style={{ width: '100%', height: '100vh' }}>
-      {treeData.length > 0 ? (
-        <Tree
-          data={treeData}
-          orientation="vertical"
-          renderCustomLink={renderCustomPath}
-          translate={{ x: window.innerWidth / 2, y: window.innerHeight / 10 }}
-          separation={{ siblings: 1, nonSiblings: 1.5 }}
-        />
-      ) : (
-        <p>Loading tree data...</p>
-      )}
+    <div className="App h-screen w-full">
+      {visibleTree ? treeComponent : <p>Loading tree data...</p>}
+      <div className="absolute bottom-0 left-0 w-full h-24 bg-blue-200 p-4 box-border">
+        <strong>Max Path:</strong> {maxPathInfo.path.join(' -> ')} <br />
+        <strong>Total Weight:</strong> {maxPathInfo.weight}
+      </div>
     </div>
   );
 };
